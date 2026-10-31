@@ -7,7 +7,7 @@ import path from 'node:path';
 import {createRequire} from 'node:module';
 import crypto from 'node:crypto';
 const require=createRequire(import.meta.url);
-const VERSION='2026-10-31-offline-v1';
+const VERSION='2026-10-31-offline-v2';
 const args=process.argv.slice(2), has=x=>args.includes(x);
 const opt=(x,d)=>has(x)?args[args.indexOf(x)+1]:d;
 const data=path.resolve(opt('--data',process.env.DATA_DIR||'/app/data'));
@@ -66,16 +66,25 @@ for(const file of all){
  let changes=0,unknown=false;
  function visit(v,k='',parent=null){
   if(typeof v==='string'){
+   // message_swipes.extra is serialized JSON holding attachment URL and filename.
+   // Traverse that JSON structurally rather than editing arbitrary string payloads.
+   if(k==='extra' && (v.trimStart().startsWith('{') || v.trimStart().startsWith('[')) &&
+      [...selectedNames].some(name=>v.includes(name))){
+    let embedded;
+    try{embedded=JSON.parse(v)}catch{unknown=true;return v}
+    const updated=visit(embedded,'',null);
+    return JSON.stringify(updated);
+   }
    let next=v;
    // Only known image path or URL suffixes, and exact filePath fields.
    for(const rel of selectedRel){
     const basename=path.basename(rel),newRel=rel.replace(/\.png$/,'.webp');
     if(k==='filePath'&&v===rel){next=newRel;occurrences.set(rel,occurrences.get(rel)+1);break}
-    if((k==='url'||k==='src'||k==='imageUrl'||k==='imagePath')&&v.includes(basename)){
+    if((k==='url'||k==='src'||k==='imageUrl'||k==='imagePath')&&v.includes('/'+basename)){
       next=v.split(rel).join(newRel).split('/'+basename).join('/'+path.basename(newRel));
       if(next!==v){occurrences.set(rel,occurrences.get(rel)+1);break}
     }
-    if(v.includes(basename))unknown=true;
+    if(v.includes(basename)&&next===v)unknown=true;
    }
    if(next!==v){changes++;return next}
    return v;
@@ -85,7 +94,7 @@ for(const file of all){
    const result={};
    for(const [key,value] of Object.entries(v))result[key]=visit(value,key,v);
    // Correct download names for attachments whose URL was updated.
-   if(typeof result.url==='string'&&/\/[^/]+\.webp(?:\?.*)?$/.test(result.url)&&typeof result.filename==='string'&&/^illustration_\d+\.png$/.test(result.filename)){result.filename=result.filename.replace(/\.png$/,'.webp');changes++}
+   if(typeof result.url==='string'&&selected.some(([rel])=>result.url.includes('/'+path.basename(rel,'.png')+'.webp'))&&typeof result.filename==='string'&&/^illustration_\d+\.png$/.test(result.filename)){result.filename=result.filename.replace(/\.png$/,'.webp');changes++}
    return result
   }
   return v
