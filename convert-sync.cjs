@@ -1,14 +1,20 @@
-{
-  "kind": "marinara.personal-extension",
-  "version": 1,
-  "config": {
-    "name": "갤러리 webp 변환",
-    "version": "1.8.3",
-    "description": "채팅방 갤러리의 PNG 삽화를 브라우저에서 WebP로 변환해 서버 용량을 줄입니다. 선택한 이미지 변환·선택 프롬프트 일괄 복사 버튼이 선택 바에 들어가고, 갤러리 헤더의 설정 버튼에서 그리드 열 수(기본/3/4/5), 새 삽화 자동 변환, 변환 품질(5단위), 캐릭터·페르소나 갤러리 사본 대상과 예상 용량, 이 채팅방 전체 변환, 사본 만들기를 다룹니다. 엔진 수정 없이 순정 갤러리 API만 사용합니다.",
-    "runtime": "client",
-    "enabled": false,
-    "capabilities": ["full_page_access"],
-    "jsPath": "extension.js",
-    "cssPath": "extension.css"
+'use strict';
+const { spawnSync } = require('node:child_process');
+const path = require('node:path');
+const PNG_MAGIC = Buffer.from('89504e470d0a1a0a','hex');
+module.exports = function convertPng(source) {
+  if (process.env.MARINARA_RP_WEBP_OFF === '1' || !Buffer.isBuffer(source) || !source.subarray(0,8).equals(PNG_MAGIC)) return null;
+  const maxMb = Number(process.env.MARINARA_RP_WEBP_MAX_MB || 30);
+  if (source.length > Math.min(Math.max(maxMb,1),100)*1048576) return null;
+  const quality = Math.min(100,Math.max(50,Number(process.env.MARINARA_RP_WEBP_QUALITY || 95)));
+  const job = spawnSync(process.execPath, [path.join(__dirname,'worker.cjs'),String(quality)], {
+    input: source, maxBuffer: Math.max(64*1048576,source.length*3), timeout: 45000,
+    env: {...process.env, NODE_OPTIONS:''}
+  });
+  if (job.status !== 0 || job.error || !job.stdout?.length || job.stdout.length >= source.length) {
+    if (job.stderr?.length) console.warn('[rp-webp] PNG retained:',String(job.stderr).slice(0,200));
+    return null;
   }
-}
+  console.log(`[rp-webp] PNG ${source.length} -> WebP ${job.stdout.length} bytes`);
+  return job.stdout;
+};
