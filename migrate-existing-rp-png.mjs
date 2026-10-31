@@ -16,7 +16,7 @@ const apply=flag('--apply'), stopped=flag('--server-stopped'), keep=flag('--keep
 const limit=Number(opt('--limit','5'));
 if(flag('--version')){console.log(VERSION);process.exit(0)}
 if(!Number.isSafeInteger(limit)||limit<1||limit>10000)throw Error('Invalid --limit');
-if(apply&&!stopped)throw Error('Apply requires --server-stopped; shut down Marinara first');
+if(apply)throw Error('Apply is temporarily disabled: reference updates and rollback have not passed integration tests. Use dry-run only.');
 if(!fs.existsSync(path.join(root,'chat_images')))throw Error('Missing file-native chat_images table');
 function walk(dir){const out=[];const stack=[dir];while(stack.length){const d=stack.pop();if(!fs.existsSync(d))continue;for(const e of fs.readdirSync(d,{withFileTypes:true})){const f=path.join(d,e.name);if(e.isDirectory())stack.push(f);else if(e.isFile()&&/\.json(?:\.bak)?$/.test(f))out.push(f)}}return out.sort()}
 const files=walk(root);const primary=files.filter(f=>f.includes(path.sep+'chat_images'+path.sep)&&f.endsWith('.json'));
