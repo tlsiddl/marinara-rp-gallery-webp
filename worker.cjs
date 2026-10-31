@@ -1,14 +1,25 @@
-{
-  "kind": "marinara.personal-extension",
-  "version": 1,
-  "config": {
-    "name": "갤러리 webp 변환",
-    "version": "1.8.3",
-    "description": "채팅방 갤러리의 PNG 삽화를 브라우저에서 WebP로 변환해 서버 용량을 줄입니다. 선택한 이미지 변환·선택 프롬프트 일괄 복사 버튼이 선택 바에 들어가고, 갤러리 헤더의 설정 버튼에서 그리드 열 수(기본/3/4/5), 새 삽화 자동 변환, 변환 품질(5단위), 캐릭터·페르소나 갤러리 사본 대상과 예상 용량, 이 채팅방 전체 변환, 사본 만들기를 다룹니다. 엔진 수정 없이 순정 갤러리 API만 사용합니다.",
-    "runtime": "client",
-    "enabled": false,
-    "capabilities": ["full_page_access"],
-    "jsPath": "extension.js",
-    "cssPath": "extension.css"
-  }
-}
+'use strict';
+const { createRequire } = require('node:module');
+let sharp;
+try { sharp = createRequire('/app/packages/server/package.json')('sharp'); }
+catch { sharp = require('sharp'); }
+const chunks=[];
+process.stdin.on('data', c=>chunks.push(c));
+process.stdin.on('end', async ()=>{
+ try {
+  const png=Buffer.concat(chunks);
+  const quality=Number(process.argv[2]||95);
+  const info=await sharp(png).metadata();
+  if(info.format!=='png' || !info.width || !info.height || info.width*info.height>35_000_000) process.exit(2);
+  const enc=sharp(png,{limitInputPixels:35_000_000});
+  const webp=await (quality===100?enc.webp({lossless:true,effort:4}).toBuffer():enc.webp({quality,alphaQuality:100,effort:4}).toBuffer());
+  const [a,b]=await Promise.all([
+    sharp(png).ensureAlpha().raw().toBuffer(),
+    sharp(webp).ensureAlpha().raw().toBuffer()
+  ]);
+  if(a.length!==b.length) process.exit(3);
+  for(let i=3;i<a.length;i+=4) if(a[i]!==b[i]) process.exit(4);
+  if(webp.length>=png.length) process.exit(5);
+  process.stdout.write(webp);
+ } catch(e) { console.error(e?.message||String(e)); process.exitCode=6; }
+});
