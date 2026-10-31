@@ -1,14 +1,39 @@
-{
-  "kind": "marinara.personal-extension",
-  "version": 1,
-  "config": {
-    "name": "갤러리 webp 변환",
-    "version": "1.8.3",
-    "description": "채팅방 갤러리의 PNG 삽화를 브라우저에서 WebP로 변환해 서버 용량을 줄입니다. 선택한 이미지 변환·선택 프롬프트 일괄 복사 버튼이 선택 바에 들어가고, 갤러리 헤더의 설정 버튼에서 그리드 열 수(기본/3/4/5), 새 삽화 자동 변환, 변환 품질(5단위), 캐릭터·페르소나 갤러리 사본 대상과 예상 용량, 이 채팅방 전체 변환, 사본 만들기를 다룹니다. 엔진 수정 없이 순정 갤러리 API만 사용합니다.",
-    "runtime": "client",
-    "enabled": false,
-    "capabilities": ["full_page_access"],
-    "jsPath": "extension.js",
-    "cssPath": "extension.css"
-  }
-}
+# Marinara RP Gallery WebP (experimental)
+
+Server-side PNG → WebP conversion for Marinara Engine 2.5.x RP/conversation images saved through `saveImageToDisk()`. Conversion occurs on the server, so the browser (including iOS Safari) does not need WebP encoding support. Gacha Forge's global gallery is not modified.
+
+**Experimental: do not install on a production server until validated against your installed engine build and a real NovelAI image.** The code is a Node ESM load hook for the built server module; engine updates can change its signature. It does **not** cover staged images, all direct uploads, or previously saved PNG files.
+
+## NovelAI metadata
+
+The converter compares the full alpha channel between the PNG and WebP. It keeps the original PNG when alpha differs, WebP would be larger, or conversion fails. This is a necessary check for alpha-based NovelAI stealth metadata, **not proof** that NovelAI Inspect can decode the resulting file. PNG tEXt/iTXt metadata is **not preserved**. Test with a real NovelAI PNG before enabling this patch for important images.
+
+## Docker installation (after compatibility testing)
+
+Place the repository directory at `/root/Marinara-Engine/rp-webp-patch`. Add to the existing `marinara` service in your active Compose config, preserving all existing volumes and NODE_OPTIONS:
+
+```yaml
+services:
+  marinara:
+    volumes:
+      - ./rp-webp-patch:/app/rp-webp-patch:ro
+    environment:
+      - NODE_OPTIONS=--import=/app/rp-webp-patch/register.mjs
+      - MARINARA_RP_WEBP_QUALITY=95
+```
+
+**Do not replace an existing NODE_OPTIONS value.** Append ` --import=/app/rp-webp-patch/register.mjs` to it; other preloads (including Gacha Forge WebP) must remain.
+
+```bash
+cd /root/Marinara-Engine
+docker compose config -q
+docker compose config | grep -E 'NODE_OPTIONS|rp-webp'
+docker compose up -d --force-recreate marinara
+docker compose logs --since 5m marinara | grep rp-webp
+```
+
+Environment: `MARINARA_RP_WEBP_QUALITY=95` (50–100); `MARINARA_RP_WEBP_MAX_MB=30`; `MARINARA_RP_WEBP_OFF=1` to disable. To remove, delete only this mount and `--import` option, then recreate the container. Existing WebP images remain WebP.
+
+## Tests
+
+`node test-loader.mjs` checks module rewrite/passthrough/signature changes. `node test-conversion.cjs` requires sharp and checks PNG→WebP/alpha identity. Docker Node 24, end-to-end gallery references, and real NovelAI Inspect compatibility have not yet been validated. Do not describe them as passing.
