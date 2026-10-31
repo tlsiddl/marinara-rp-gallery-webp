@@ -5,7 +5,7 @@ const sample=`export function saveImageToDisk(chatId, base64, ext, options = {})
   const ownerDir = options.shared ? "shared" : chatId;
   const detectedMime = detectImageMimeType(base64);
   const effectiveExt = (detectedMime ? imageExtensionFromMimeType(detectedMime) : null) ?? ext;
-  const filename = \`${newId()}.${effectiveExt}\`;
+  const filename = "image.png";
   const tempPath = "/tmp/image.tmp";
   writeFileSync(tempPath, Buffer.from(base64, "base64"));
   return filename;
