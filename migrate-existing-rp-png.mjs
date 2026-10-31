@@ -28,6 +28,12 @@ const selected=[...byName.values()].sort((a,b)=>a.id.localeCompare(b.id)).slice(
 const stamp=new Date().toISOString().replace(/[:.]/g,'-');
 const backup=path.join(data,'rp-webp-migration-backups',stamp);
 console.log('[rp-webp-migrate] eligible:',byName.size,'selected:',selected.length,'mode:',apply?'APPLY':'DRY-RUN');
+if(!apply){
+ console.log('[rp-webp-migrate] FAST PREVIEW: paths only; no encoding, reference verification, or writes.');
+ for(const item of selected)console.log('CANDIDATE',item.rel,'galleryRecords:',item.records);
+ console.log('[rp-webp-migrate] no files modified');
+ process.exit(0);
+}
 let done=0,skipped=0;
 for(const item of selected){
  const png=fs.readFileSync(item.full);
