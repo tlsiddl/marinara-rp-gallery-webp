@@ -147,7 +147,16 @@ try{
   writeAtomic(target,e.after);committed++;
  }
  for(const [p,e] of edits)assert(hash(fs.readFileSync(path.join(root,p)))===hash(e.after),'Verification failed: '+p);
- for(const [rel] of selected){for(const filename of files(root)){if(fs.readFileSync(filename,'utf8').includes(path.basename(rel)))throw Error('Unresolved PNG reference after rewrite: '+rel+' in '+filename)}}
+ // Scan each record only once for any still-referenced PNG basename.
+ // The previous implementation re-read the full storage for each image (O(images * storage)).
+ const leftoverNames=new Set(selected.map(([rel])=>path.basename(rel)));
+ for(const filename of all){
+  const source=fs.readFileSync(filename,'utf8');
+  const matches=source.match(/[A-Za-z0-9_-]+\\.png/g);
+  if(!matches)continue;
+  const unresolved=matches.find(name=>leftoverNames.has(name));
+  if(unresolved)throw Error('Unresolved PNG reference after rewrite: '+unresolved+' in '+filename);
+ }
  for(const e of converted)assert(hash(fs.readFileSync(path.join(gallery,e.to)))===e.webpHash,'WebP changed after write: '+e.to);
   for(const e of converted){const original=path.join(gallery,e.from);assert(hash(fs.readFileSync(original))===e.pngHash,'PNG changed before delete: '+e.from);fs.unlinkSync(original)}
   console.log('SUCCESS',converted.length,'PNG replaced with WebP; backup',backup)
