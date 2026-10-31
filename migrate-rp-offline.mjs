@@ -7,6 +7,7 @@ import path from 'node:path';
 import {createRequire} from 'node:module';
 import crypto from 'node:crypto';
 const require=createRequire(import.meta.url);
+const {verify:verifyMetadata}=require('./png-webp-metadata.cjs');
 const VERSION='2026-10-31-two-phase-v3';
 const args=process.argv.slice(2), has=x=>args.includes(x);
 const opt=(x,d)=>has(x)?args[args.indexOf(x)+1]:d;
@@ -15,13 +16,15 @@ const root=path.join(data,'storage','tables'),gallery=path.join(data,'gallery');
 const apply=has('--apply'),stopped=has('--server-stopped'),restore=opt('--restore',null);
 const limit=Number(opt('--limit','5'));
 const staged=has('--use-stage');
+const deletePng=has('--delete-png');
 const stageDir=path.join(data,'rp-webp-stage');
+if(apply)assert(deletePng&&staged,'Replacement requires --delete-png and --use-stage');
 const stageManifest=staged?JSON.parse(fs.readFileSync(path.join(stageDir,'manifest.json'),'utf8')):null;
 if(staged)assert(stageManifest?.schema===1 && stageManifest.entries && typeof stageManifest.entries==='object','Missing stage manifest');
 const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
 function assert(c,m){if(!c)throw Error(m)}
 function files(dir){if(!fs.existsSync(dir))return [];const o=[],stack=[dir];while(stack.length){const dir=stack.pop();for(const e of fs.readdirSync(dir,{withFileTypes:true})){const f=path.join(dir,e.name);if(e.isDirectory())stack.push(f);else if(e.isFile()&&f.endsWith('.json'))o.push(f)}}return o.sort()}
-function writeAtomic(file,bytes){const temp=file+'.rp-webp-tmp';fs.writeFileSync(temp,bytes,{flag:'wx'});fs.renameSync(temp,file)}
+function writeAtomic(file,bytes){const temp=file+'.rp-webp-tmp-'+process.pid;try{fs.writeFileSync(temp,bytes,{flag:'wx'});fs.renameSync(temp,file)}finally{if(fs.existsSync(temp))fs.unlinkSync(temp)}}
 if(has('--version')){console.log(VERSION);process.exit(0)}
 assert(Number.isSafeInteger(limit)&&limit>=1&&limit<=10000,'Invalid --limit');
 assert(!apply||stopped,'Apply requires --server-stopped and fully stopped server');
@@ -37,9 +40,11 @@ if(restore){
  // Refuse restore if any file has changed since this migration.
  for(const e of manifest.records){const f=path.join(root,e.path);assert(hash(fs.readFileSync(f))===e.afterHash,'Changed since migration; refuse restore: '+e.path)}
  for(const e of manifest.images){const f=path.join(gallery,e.to);assert(hash(fs.readFileSync(f))===e.webpHash,'Changed WebP; refuse restore: '+e.to)}
+ for(const e of manifest.images){const save=path.join(dir,'originals',e.from);assert(fs.existsSync(save)&&hash(fs.readFileSync(save))===e.pngHash,'Missing backup PNG: '+e.from)}
  for(const e of manifest.records){writeAtomic(path.join(root,e.path),fs.readFileSync(path.join(dir,'records',e.path)))}
+ for(const e of manifest.images){const png=path.join(gallery,e.from);if(!fs.existsSync(png))writeAtomic(png,fs.readFileSync(path.join(dir,'originals',e.from)))}
  for(const e of manifest.images)fs.unlinkSync(path.join(gallery,e.to));
- console.log('RESTORED',manifest.images.length,'images; original PNG files were always retained');process.exit(0)
+ console.log('RESTORED',manifest.images.length,'original PNG images and references');process.exit(0)
 }
 assert(fs.existsSync(path.join(root,'chat_images')),'Missing chat_images table');
 // A fast, read-only candidate lookup. No reference scans and no encoding.
@@ -56,6 +61,7 @@ for(const file of primaries){
 const selected=[...candidates].filter(([rel])=>!staged||Boolean(stageManifest.entries[rel])).sort((a,b)=>a[0].localeCompare(b[0])).slice(0,limit);
 console.log('VERSION',VERSION,'eligible',candidates.size,'selected',selected.length,'mode',apply?'APPLY':'PREVIEW');
 if(!apply){for(const [rel] of selected)console.log('CANDIDATE',rel);console.log('No files modified');process.exit(0)}
+assert(selected.length>0,'No eligible images selected');
 const all=files(root);
 const selectedNames=new Set(selected.map(([rel])=>path.basename(rel)));
 const selectedRel=new Set(selected.map(([rel])=>rel));
@@ -110,21 +116,26 @@ for(const file of all){
 for(const [rel] of selected)assert(occurrences.get(rel)>0,'Gallery row not found: '+rel);
 const backup=path.join(data,'rp-webp-backups',new Date().toISOString().replace(/[:.]/g,'-')+'-'+process.pid);
 fs.mkdirSync(path.join(backup,'records'),{recursive:true});
-const convert=require('./convert-sync.cjs');
+const convert=staged?null:require('./convert-sync.cjs');
 const converted=[];
 for(const [rel,pngFile] of selected){
  const png=fs.readFileSync(pngFile),to=rel.replace(/\.png$/,'.webp'),webpFile=path.join(gallery,to);
  assert(!fs.existsSync(webpFile),'Target exists: '+to);
  let out;
  if(staged){const entry=stageManifest.entries[rel];assert(entry&&entry.from===rel&&entry.to===to&&entry.pngSha===hash(png),'Stage PNG checksum mismatch: '+rel);
- const sf=path.join(stageDir,'images',path.basename(to));out=fs.readFileSync(sf);assert(hash(out)===entry.webpSha&&out.length< png.length,'Stage WebP checksum mismatch: '+rel);
+ const originalStage=fs.readFileSync(path.join(stageDir,'images',path.basename(to)));
+  assert(hash(originalStage)===entry.webpSha,'Original stage checksum mismatch: '+rel);
+  const sf=path.join(stageDir,'images-with-metadata',path.basename(to));out=fs.readFileSync(sf);
+  assert(out.length<png.length,'Metadata-preserving WebP not smaller: '+rel);
  assert(out.subarray(0,4).toString()==='RIFF'&&out.subarray(8,12).toString()==='WEBP','Stage output not WebP: '+rel);
  }else{out=convert(png);assert(out,'Conversion rejected: '+rel)}
- converted.push({from:rel,to,webp:out,pngHash:hash(png),webpHash:hash(out)});
+ verifyMetadata(png,out);
+  converted.push({from:rel,to,webp:out,pngHash:hash(png),webpHash:hash(out)});
 }
 const manifest={version:VERSION,createdAt:new Date().toISOString(),images:converted.map(({from,to,pngHash,webpHash})=>({from,to,pngHash,webpHash})),records:[...edits].map(([p,e])=>({path:p,beforeHash:hash(e.before),afterHash:hash(e.after)}))};
 for(const [p,e] of edits){const save=path.join(backup,'records',p);fs.mkdirSync(path.dirname(save),{recursive:true});fs.writeFileSync(save,e.before)}
-fs.writeFileSync(path.join(backup,'manifest.json'),JSON.stringify(manifest,null,2));
+for(const e of converted){const dst=path.join(backup,'originals',e.from);fs.mkdirSync(path.dirname(dst),{recursive:true});const original=fs.readFileSync(path.join(gallery,e.from));assert(hash(original)===e.pngHash,'Original PNG changed: '+e.from);fs.writeFileSync(dst,original,{flag:'wx'});assert(hash(fs.readFileSync(dst))===e.pngHash,'Backup verification failed: '+e.from)}
+ fs.writeFileSync(path.join(backup,'manifest.json'),JSON.stringify(manifest,null,2));
 console.log('BACKUP',backup,'records',edits.size,'images',converted.length);
 let committed=0;
 try{
@@ -136,11 +147,24 @@ try{
   writeAtomic(target,e.after);committed++;
  }
  for(const [p,e] of edits)assert(hash(fs.readFileSync(path.join(root,p)))===hash(e.after),'Verification failed: '+p);
- console.log('SUCCESS',converted.length,'converted; original PNGs retained; backup',backup)
+ // Scan each record only once for any still-referenced PNG basename.
+ // The previous implementation re-read the full storage for each image (O(images * storage)).
+ const leftoverNames=new Set(selected.map(([rel])=>path.basename(rel)));
+ for(const filename of all){
+  const source=fs.readFileSync(filename,'utf8');
+  const matches=source.match(/[A-Za-z0-9_-]+\\.png/g);
+  if(!matches)continue;
+  const unresolved=matches.find(name=>leftoverNames.has(name));
+  if(unresolved)throw Error('Unresolved PNG reference after rewrite: '+unresolved+' in '+filename);
+ }
+ for(const e of converted)assert(hash(fs.readFileSync(path.join(gallery,e.to)))===e.webpHash,'WebP changed after write: '+e.to);
+  for(const e of converted){const original=path.join(gallery,e.from);assert(hash(fs.readFileSync(original))===e.pngHash,'PNG changed before delete: '+e.from);fs.unlinkSync(original)}
+  console.log('SUCCESS',converted.length,'PNG replaced with WebP; backup',backup)
 }catch(err){
  console.error('APPLY ERROR',err.message,'starting automatic rollback');
  // Only revert records matching our write; never clobber outside changes.
- for(const [p,e] of edits){const target=path.join(root,p);if(fs.existsSync(target)&&hash(fs.readFileSync(target))===hash(e.after))writeAtomic(target,e.before)}
+ for(const item of converted){const png=path.join(gallery,item.from),backupPng=path.join(backup,'originals',item.from);if(!fs.existsSync(png)&&fs.existsSync(backupPng))writeAtomic(png,fs.readFileSync(backupPng))}
+  for(const [p,e] of edits){const target=path.join(root,p);if(fs.existsSync(target)&&hash(fs.readFileSync(target))===hash(e.after))writeAtomic(target,e.before)}
  for(const e of converted){const target=path.join(gallery,e.to);if(fs.existsSync(target)&&hash(fs.readFileSync(target))===e.webpHash)fs.unlinkSync(target)}
  throw err
 }

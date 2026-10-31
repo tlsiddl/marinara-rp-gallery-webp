@@ -1,39 +1,35 @@
-# Marinara RP Gallery WebP (experimental)
+# Marinara RP Gallery WebP — metadata-preserving replacement (candidate)
 
-Server-side PNG → WebP conversion for Marinara Engine 2.5.x RP/conversation images saved through `saveImageToDisk()`. Conversion occurs on the server, so the browser (including iOS Safari) does not need WebP encoding support. Gacha Forge's global gallery is not modified.
+> **Draft / not production-certified.** PNG -> WebP image references and PNG backup/restore were changed. XMP preservation was tested on synthetic data; NovelAI Inspect and Marinara's native prompt-import UI compatibility are **not proven**. Do not run the deletion migration until those reader behaviors are verified on your server.
 
-**Experimental: do not install on a production server until validated against your installed engine build and a real NovelAI image.** The code is a Node ESM load hook for the built server module; engine updates can change its signature. It does **not** cover staged images, all direct uploads, or previously saved PNG files.
+## Download/update patch files with curl
 
-## NovelAI metadata
-
-The converter compares the full alpha channel between the PNG and WebP. It keeps the original PNG when alpha differs, WebP would be larger, or conversion fails. This is a necessary check for alpha-based NovelAI stealth metadata, **not proof** that NovelAI Inspect can decode the resulting file. PNG tEXt/iTXt metadata is **not preserved**. Test with a real NovelAI PNG before enabling this patch for important images.
-
-## Docker installation (after compatibility testing)
-
-Place the repository directory at `/root/Marinara-Engine/rp-webp-patch`. Add to the existing `marinara` service in your active Compose config, preserving all existing volumes and NODE_OPTIONS:
-
-```yaml
-services:
-  marinara:
-    volumes:
-      - ./rp-webp-patch:/app/rp-webp-patch:ro
-    environment:
-      - NODE_OPTIONS=--import=/app/rp-webp-patch/register.mjs
-      - MARINARA_RP_WEBP_QUALITY=95
-```
-
-**Do not replace an existing NODE_OPTIONS value.** Append ` --import=/app/rp-webp-patch/register.mjs` to it; other preloads (including Gacha Forge WebP) must remain.
+From the host:
 
 ```bash
-cd /root/Marinara-Engine
-docker compose config -q
-docker compose config | grep -E 'NODE_OPTIONS|rp-webp'
-docker compose up -d --force-recreate marinara
-docker compose logs --since 5m marinara | grep rp-webp
+curl -fsSL https://raw.githubusercontent.com/tlsiddl/marinara-rp-gallery-webp/fix/webp-metadata-full-replacement/install.sh | bash
 ```
 
-Environment: `MARINARA_RP_WEBP_QUALITY=95` (50–100); `MARINARA_RP_WEBP_MAX_MB=30`; `MARINARA_RP_WEBP_OFF=1` to disable. To remove, delete only this mount and `--import` option, then recreate the container. Existing WebP images remain WebP.
+The installer backs up a pre-existing `rp-webp-patch` directory and updates its code. It **does not restart Docker, change Compose config, migrate images, or remove PNG files**. Existing Compose integration needs to mount `./rp-webp-patch:/app/rp-webp-patch:ro` and append `--import=/app/rp-webp-patch/register.mjs` to existing `NODE_OPTIONS` without removing other preloads.
+
+## Data and migration safety
+
+- `worker.cjs` embeds exact PNG `tEXt`, `zTXt`, `iTXt` payloads into WebP XMP and verifies the roundtrip. This is a custom archive, not an assurance that native NovelAI or Marinara readers can import the metadata.
+- Existing 700 staged WebPs must have matching PNG hashes and metadata-rich `images-with-metadata` counterparts.
+- Offline migration requires `--use-stage --delete-png --apply --server-stopped`. It backs up the originals and JSON records before deletion and refuses unrecognized image references.
+- **Do not pass `--server-stopped` unless Marinara is actually stopped.** The flag is a declaration, not a shutdown mechanism.
+- Backups under `rp-webp-backups` retain original PNG bytes for rollback and consume storage.
+- `migrate-existing-rp-png.mjs` is legacy and should not be used for this migration.
 
 ## Tests
 
-`node test-loader.mjs` checks module rewrite/passthrough/signature changes. `node test-conversion.cjs` requires sharp and checks PNG→WebP/alpha identity. Docker Node 24, end-to-end gallery references, and real NovelAI Inspect compatibility have not yet been validated. Do not describe them as passing.
+```bash
+node test-metadata.cjs
+node test-loader.mjs
+```
+
+Image conversion tests additionally require `sharp`, and operational migration tests require a stopped server or disposable fixture. Current integration testing does not establish automatic prompt import compatibility.
+
+## Limitations
+
+Native metadata readers may only recognize PNG tEXt/iTXt and may not parse the XMP archive in WebP. Conversion does not automatically make a PNG-only decoder work with a WebP. Test prompt restoration on a copy before deleting originals.
