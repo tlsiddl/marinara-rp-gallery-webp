@@ -64,50 +64,60 @@ if(!apply){for(const [rel] of selected)console.log('CANDIDATE',rel);console.log(
 assert(selected.length>0,'No eligible images selected');
 const all=files(root);
 const selectedNames=new Set(selected.map(([rel])=>path.basename(rel)));
-const selectedRel=new Set(selected.map(([rel])=>rel));
+const selectedByName=new Map(selected.map(([rel])=>[path.basename(rel),rel]));
+const selectedByRel=new Map(selected.map(([rel])=>[rel,rel.replace(/\\.png$/,'.webp')]));
 const edits=new Map(), occurrences=new Map();
 for(const [rel] of selected)occurrences.set(rel,0);
-// Single read per JSON file; reject unsupported mentions rather than silently corrupt.
+const filenamePattern=/[A-Za-z0-9_-]+\\.png/g;
+function selectedMatches(str){
+ const matches=str.match(filenamePattern);
+ return matches?matches.filter(name=>selectedNames.has(name)):[];
+}
+// Read each JSON record only once, and match referenced basenames in linear time.
 for(const file of all){
  let original;try{original=fs.readFileSync(file)}catch(e){if(e.code==='ENOENT')throw Error('Storage changed during scan, stop the server: '+file);throw e}
  const source=original.toString('utf8');
- if(![...selectedNames].some(name=>source.includes(name)))continue;
+ if(selectedMatches(source).length===0)continue;
  let obj;try{obj=JSON.parse(source)}catch{throw Error('Unparseable record with PNG reference: '+file)}
  let changes=0,unknown=false;
- function visit(v,k='',parent=null){
+ function visit(v,k=''){
   if(typeof v==='string'){
+   const names=selectedMatches(v);
+   if(names.length===0)return v;
    // message_swipes.extra is serialized JSON holding attachment URL and filename.
-   // Traverse that JSON structurally rather than editing arbitrary string payloads.
-   if(k==='extra' && (v.trimStart().startsWith('{') || v.trimStart().startsWith('[')) &&
-      [...selectedNames].some(name=>v.includes(name))){
+   if(k==='extra' && (v.trimStart().startsWith('{') || v.trimStart().startsWith('['))){
     let embedded;
     try{embedded=JSON.parse(v)}catch{unknown=true;return v}
-    const updated=visit(embedded,'',null);
+    const updated=visit(embedded);
     return JSON.stringify(updated);
    }
    let next=v;
-   // Only known image path or URL suffixes, and exact filePath fields.
-   for(const rel of selectedRel){
-    const basename=path.basename(rel),newRel=rel.replace(/\.png$/,'.webp');
-    if(k==='filePath'&&v===rel){next=newRel;occurrences.set(rel,occurrences.get(rel)+1);break}
-    if((k==='url'||k==='src'||k==='imageUrl'||k==='imagePath')&&v.includes('/'+basename)){
-      next=v.split(rel).join(newRel).split('/'+basename).join('/'+path.basename(newRel));
-      if(next!==v){occurrences.set(rel,occurrences.get(rel)+1);break}
+   if(k==='filePath'&&selectedByRel.has(v)){
+    next=selectedByRel.get(v);
+    occurrences.set(v,occurrences.get(v)+1);
+   }else if(k==='url'||k==='src'||k==='imageUrl'||k==='imagePath'){
+    for(const name of new Set(names)){
+     const rel=selectedByName.get(name),newRel=selectedByRel.get(rel);
+     const updated=next.split(rel).join(newRel).split('/'+name).join('/'+path.basename(newRel));
+     if(updated!==next){next=updated;occurrences.set(rel,occurrences.get(rel)+1)}
     }
-    if(v.includes(basename)&&next===v)unknown=true;
    }
+   if(selectedMatches(next).length)unknown=true;
    if(next!==v){changes++;return next}
    return v;
   }
-  if(Array.isArray(v))return v.map(x=>visit(x,'',v));
+  if(Array.isArray(v))return v.map(x=>visit(x));
   if(v&&typeof v==='object'){
    const result={};
-   for(const [key,value] of Object.entries(v))result[key]=visit(value,key,v);
+   for(const [key,value] of Object.entries(v))result[key]=visit(value,key);
    // Correct download names for attachments whose URL was updated.
-   if(typeof result.url==='string'&&selected.some(([rel])=>result.url.includes('/'+path.basename(rel,'.png')+'.webp'))&&typeof result.filename==='string'&&/^illustration_\d+\.png$/.test(result.filename)){result.filename=result.filename.replace(/\.png$/,'.webp');changes++}
-   return result
+   if(typeof result.url==='string'&&/[A-Za-z0-9_-]+\\.webp/.test(result.url)&&typeof result.filename==='string'&&/^illustration_\\d+\\.png$/.test(result.filename)){
+    const related=[...selectedByName.keys()].some(name=>result.url.includes('/'+name.replace(/\\.png$/,'.webp')));
+    if(related){result.filename=result.filename.replace(/\\.png$/,'.webp');changes++}
+   }
+   return result;
   }
-  return v
+  return v;
  }
  const after=JSON.stringify(visit(obj));
  assert(!unknown,'Unrecognized reference to selected PNG; abort without changes: '+file);
