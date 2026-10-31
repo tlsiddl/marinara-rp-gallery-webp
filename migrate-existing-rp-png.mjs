@@ -5,7 +5,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {createRequire} from 'node:module';
 const require=createRequire(import.meta.url);
-const convert=require('./convert-sync.cjs');
+const VERSION='2026-10-31-fast-preview-v2';
+const convert=()=>require('./convert-sync.cjs');
 const args=process.argv.slice(2);
 const flag=x=>args.includes(x);
 const opt=(x,d)=>args.includes(x)?args[args.indexOf(x)+1]:d;
@@ -13,13 +14,14 @@ const data=path.resolve(opt('--data',process.env.DATA_DIR||'/app/data'));
 const root=path.join(data,'storage','tables'), gallery=path.join(data,'gallery');
 const apply=flag('--apply'), stopped=flag('--server-stopped'), keep=flag('--keep-png');
 const limit=Number(opt('--limit','5'));
+if(flag('--version')){console.log(VERSION);process.exit(0)}
 if(!Number.isSafeInteger(limit)||limit<1||limit>10000)throw Error('Invalid --limit');
 if(apply&&!stopped)throw Error('Apply requires --server-stopped; shut down Marinara first');
 if(!fs.existsSync(path.join(root,'chat_images')))throw Error('Missing file-native chat_images table');
 function walk(dir){const out=[];const stack=[dir];while(stack.length){const d=stack.pop();if(!fs.existsSync(d))continue;for(const e of fs.readdirSync(d,{withFileTypes:true})){const f=path.join(d,e.name);if(e.isDirectory())stack.push(f);else if(e.isFile()&&/\.json(?:\.bak)?$/.test(f))out.push(f)}}return out.sort()}
 const files=walk(root);const primary=files.filter(f=>f.includes(path.sep+'chat_images'+path.sep)&&f.endsWith('.json'));
 const byName=new Map();
-for(const file of primary){const rows=JSON.parse(fs.readFileSync(file,'utf8'));if(!Array.isArray(rows))throw Error('Unexpected chat_images format: '+file);
+for(const file of primary){let raw;try{raw=fs.readFileSync(file,'utf8')}catch(e){if(e.code==='ENOENT'){console.warn('SKIP disappeared gallery record:',file);continue}throw e}const rows=JSON.parse(raw);if(!Array.isArray(rows))throw Error('Unexpected chat_images format: '+file);
 for(const row of rows){if(typeof row.filePath!=='string'||!/^shared\/[A-Za-z0-9_-]+\.png$/i.test(row.filePath))continue;
 const rel=row.filePath, id=path.basename(rel), full=path.join(gallery,rel);
 if(!fs.existsSync(full))continue;
@@ -27,6 +29,7 @@ if(!byName.has(id))byName.set(id,{id,rel,full,records:0});byName.get(id).records
 const selected=[...byName.values()].sort((a,b)=>a.id.localeCompare(b.id)).slice(0,limit);
 const stamp=new Date().toISOString().replace(/[:.]/g,'-');
 const backup=path.join(data,'rp-webp-migration-backups',stamp);
+console.log('[rp-webp-migrate] version:',VERSION);
 console.log('[rp-webp-migrate] eligible:',byName.size,'selected:',selected.length,'mode:',apply?'APPLY':'DRY-RUN');
 if(!apply){
  console.log('[rp-webp-migrate] FAST PREVIEW: paths only; no encoding, reference verification, or writes.');
@@ -37,14 +40,14 @@ if(!apply){
 let done=0,skipped=0;
 for(const item of selected){
  const png=fs.readFileSync(item.full);
- const webp=convert(png);
+ const webp=convert()(png);
  if(!webp){console.log('SKIP conversion:',item.rel);skipped++;continue}
  const newRel=item.rel.replace(/\.png$/i,'.webp'),newFull=path.join(gallery,newRel);
  if(fs.existsSync(newFull)){console.log('SKIP target exists:',newRel);skipped++;continue}
  const from=item.id,to=path.basename(newRel);
  const edits=[];let blocked=false;
  for(const file of files){
-  const original=fs.readFileSync(file,'utf8');
+  let original;try{original=fs.readFileSync(file,'utf8')}catch(e){if(e.code==='ENOENT'){console.warn('SKIP disappeared storage file:',file);blocked=true;break}throw e}
   if(!original.includes(from))continue;
   let parsed;
   try{parsed=JSON.parse(original)}catch{blocked=true;console.log('SKIP non-JSON reference:',file);break}
