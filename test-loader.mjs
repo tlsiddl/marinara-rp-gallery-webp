@@ -1,14 +1,20 @@
-{
-  "kind": "marinara.personal-extension",
-  "version": 1,
-  "config": {
-    "name": "갤러리 webp 변환",
-    "version": "1.8.3",
-    "description": "채팅방 갤러리의 PNG 삽화를 브라우저에서 WebP로 변환해 서버 용량을 줄입니다. 선택한 이미지 변환·선택 프롬프트 일괄 복사 버튼이 선택 바에 들어가고, 갤러리 헤더의 설정 버튼에서 그리드 열 수(기본/3/4/5), 새 삽화 자동 변환, 변환 품질(5단위), 캐릭터·페르소나 갤러리 사본 대상과 예상 용량, 이 채팅방 전체 변환, 사본 만들기를 다룹니다. 엔진 수정 없이 순정 갤러리 API만 사용합니다.",
-    "runtime": "client",
-    "enabled": false,
-    "capabilities": ["full_page_access"],
-    "jsPath": "extension.js",
-    "cssPath": "extension.css"
-  }
+import assert from 'node:assert/strict';
+import {load} from './loader.mjs';
+const url='file:///app/packages/server/dist/services/image/image-generation.js';
+const sample=`export function saveImageToDisk(chatId, base64, ext, options = {}) {
+  const ownerDir = options.shared ? "shared" : chatId;
+  const detectedMime = detectImageMimeType(base64);
+  const effectiveExt = (detectedMime ? imageExtensionFromMimeType(detectedMime) : null) ?? ext;
+  const filename = \`${newId()}.${effectiveExt}\`;
+  const tempPath = "/tmp/image.tmp";
+  writeFileSync(tempPath, Buffer.from(base64, "base64"));
+  return filename;
 }
+export function removeSavedImageFromDisk(filePath) {}`;
+const result=await load(url,{},async()=>({format:'module',source:sample}));
+assert.match(result.source,/__rpWebpConvert\(imageBytes\)/);
+assert.match(result.source,/writeFileSync\(tempPath, imageBytes\)/);
+const passthrough=await load('file:///app/other.js',{},async()=>({source:sample}));
+assert.equal(passthrough.source,sample);
+await assert.rejects(load(url,{},async()=>({source:'export function saveImageToDisk(){}\nexport function removeSavedImageFromDisk(){}'})),/Save implementation changed/);
+console.log('Loader tests passed');
