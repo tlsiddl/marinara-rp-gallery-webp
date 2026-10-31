@@ -63,6 +63,7 @@ console.log('VERSION',VERSION,'eligible',candidates.size,'selected',selected.len
 if(!apply){for(const [rel] of selected)console.log('CANDIDATE',rel);console.log('No files modified');process.exit(0)}
 assert(selected.length>0,'No eligible images selected');
 const all=files(root);
+console.log('SCAN',all.length,'JSON records for',selected.length,'images');
 const selectedNames=new Set(selected.map(([rel])=>path.basename(rel)));
 const selectedByName=new Map(selected.map(([rel])=>[path.basename(rel),rel]));
 const selectedByRel=new Map(selected.map(([rel])=>[rel,rel.replace(/\\.png$/,'.webp')]));
@@ -123,6 +124,7 @@ for(const file of all){
  assert(!unknown,'Unrecognized reference to selected PNG; abort without changes: '+file);
  if(changes){const rel=path.relative(root,file);edits.set(rel,{before:original,after:Buffer.from(after)});}
 }
+console.log('SCAN DONE',edits.size,'records to update');
 for(const [rel] of selected)assert(occurrences.get(rel)>0,'Gallery row not found: '+rel);
 const backup=path.join(data,'rp-webp-backups',new Date().toISOString().replace(/[:.]/g,'-')+'-'+process.pid);
 fs.mkdirSync(path.join(backup,'records'),{recursive:true});
@@ -142,6 +144,7 @@ for(const [rel,pngFile] of selected){
  verifyMetadata(png,out);
   converted.push({from:rel,to,webp:out,pngHash:hash(png),webpHash:hash(out)});
 }
+console.log('STAGE VERIFIED',converted.length,'WebP images');
 const manifest={version:VERSION,createdAt:new Date().toISOString(),images:converted.map(({from,to,pngHash,webpHash})=>({from,to,pngHash,webpHash})),records:[...edits].map(([p,e])=>({path:p,beforeHash:hash(e.before),afterHash:hash(e.after)}))};
 for(const [p,e] of edits){const save=path.join(backup,'records',p);fs.mkdirSync(path.dirname(save),{recursive:true});fs.writeFileSync(save,e.before)}
 for(const e of converted){const dst=path.join(backup,'originals',e.from);fs.mkdirSync(path.dirname(dst),{recursive:true});const original=fs.readFileSync(path.join(gallery,e.from));assert(hash(original)===e.pngHash,'Original PNG changed: '+e.from);fs.writeFileSync(dst,original,{flag:'wx'});assert(hash(fs.readFileSync(dst))===e.pngHash,'Backup verification failed: '+e.from)}
@@ -151,11 +154,13 @@ let committed=0;
 try{
  // Original PNG remains in place. All WebPs are created first.
  for(const e of converted)writeAtomic(path.join(gallery,e.to),e.webp);
+ console.log('WEBP WRITTEN',converted.length);
  for(const [p,e] of edits){
   const target=path.join(root,p);
   assert(hash(fs.readFileSync(target))===hash(e.before),'Concurrent change detected: '+p);
   writeAtomic(target,e.after);committed++;
  }
+ console.log('REFERENCES WRITTEN',committed,'records');
  for(const [p,e] of edits)assert(hash(fs.readFileSync(path.join(root,p)))===hash(e.after),'Verification failed: '+p);
  // Scan each record only once for any still-referenced PNG basename.
  // The previous implementation re-read the full storage for each image (O(images * storage)).
@@ -167,6 +172,7 @@ try{
   const unresolved=matches.find(name=>leftoverNames.has(name));
   if(unresolved)throw Error('Unresolved PNG reference after rewrite: '+unresolved+' in '+filename);
  }
+ console.log('REFERENCE VERIFICATION DONE');
  for(const e of converted)assert(hash(fs.readFileSync(path.join(gallery,e.to)))===e.webpHash,'WebP changed after write: '+e.to);
   for(const e of converted){const original=path.join(gallery,e.from);assert(hash(fs.readFileSync(original))===e.pngHash,'PNG changed before delete: '+e.from);fs.unlinkSync(original)}
   console.log('SUCCESS',converted.length,'PNG replaced with WebP; backup',backup)
