@@ -6,7 +6,7 @@ export async function load(url, context, nextLoad) {
   const original = String(result.source);
   // Illustrator message attachments use the provider extension instead of the saved
   // file extension. Correct the attachment's download name in the server route.
-  if (/\\/routes\\/generate\\/retry-agents-route\\.js$/.test(new URL(url).pathname)) {
+  if (new URL(url).pathname.endsWith('/routes/generate/retry-agents-route.js')) {
     const oldName = 'filename: `illustration_${variantIndex + 1}.${imageResult.ext}`';
     const newName = 'filename: `illustration_${variantIndex + 1}.${filePath.split(".").pop()}`';
     if (!original.includes(oldName)) {
