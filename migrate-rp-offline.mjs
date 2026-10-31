@@ -7,13 +7,17 @@ import path from 'node:path';
 import {createRequire} from 'node:module';
 import crypto from 'node:crypto';
 const require=createRequire(import.meta.url);
-const VERSION='2026-10-31-offline-v2';
+const VERSION='2026-10-31-two-phase-v3';
 const args=process.argv.slice(2), has=x=>args.includes(x);
 const opt=(x,d)=>has(x)?args[args.indexOf(x)+1]:d;
 const data=path.resolve(opt('--data',process.env.DATA_DIR||'/app/data'));
 const root=path.join(data,'storage','tables'),gallery=path.join(data,'gallery');
 const apply=has('--apply'),stopped=has('--server-stopped'),restore=opt('--restore',null);
 const limit=Number(opt('--limit','5'));
+const staged=has('--use-stage');
+const stageDir=path.join(data,'rp-webp-stage');
+const stageManifest=staged?JSON.parse(fs.readFileSync(path.join(stageDir,'manifest.json'),'utf8')):null;
+if(staged)assert(stageManifest?.schema===1 && stageManifest.entries && typeof stageManifest.entries==='object','Missing stage manifest');
 const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
 function assert(c,m){if(!c)throw Error(m)}
 function files(dir){if(!fs.existsSync(dir))return [];const o=[],stack=[dir];while(stack.length){const dir=stack.pop();for(const e of fs.readdirSync(dir,{withFileTypes:true})){const f=path.join(dir,e.name);if(e.isDirectory())stack.push(f);else if(e.isFile()&&f.endsWith('.json'))o.push(f)}}return o.sort()}
@@ -49,7 +53,7 @@ for(const file of primaries){
  if(fs.existsSync(abs))candidates.set(rel,abs)
  }
 }
-const selected=[...candidates].sort((a,b)=>a[0].localeCompare(b[0])).slice(0,limit);
+const selected=[...candidates].filter(([rel])=>!staged||Boolean(stageManifest.entries[rel])).sort((a,b)=>a[0].localeCompare(b[0])).slice(0,limit);
 console.log('VERSION',VERSION,'eligible',candidates.size,'selected',selected.length,'mode',apply?'APPLY':'PREVIEW');
 if(!apply){for(const [rel] of selected)console.log('CANDIDATE',rel);console.log('No files modified');process.exit(0)}
 const all=files(root);
@@ -111,7 +115,11 @@ const converted=[];
 for(const [rel,pngFile] of selected){
  const png=fs.readFileSync(pngFile),to=rel.replace(/\.png$/,'.webp'),webpFile=path.join(gallery,to);
  assert(!fs.existsSync(webpFile),'Target exists: '+to);
- const out=convert(png);assert(out,'Conversion rejected: '+rel);
+ let out;
+ if(staged){const entry=stageManifest.entries[rel];assert(entry&&entry.from===rel&&entry.to===to&&entry.pngSha===hash(png),'Stage PNG checksum mismatch: '+rel);
+ const sf=path.join(stageDir,'images',path.basename(to));out=fs.readFileSync(sf);assert(hash(out)===entry.webpSha&&out.length< png.length,'Stage WebP checksum mismatch: '+rel);
+ assert(out.subarray(0,4).toString()==='RIFF'&&out.subarray(8,12).toString()==='WEBP','Stage output not WebP: '+rel);
+ }else{out=convert(png);assert(out,'Conversion rejected: '+rel)}
  converted.push({from:rel,to,webp:out,pngHash:hash(png),webpHash:hash(out)});
 }
 const manifest={version:VERSION,createdAt:new Date().toISOString(),images:converted.map(({from,to,pngHash,webpHash})=>({from,to,pngHash,webpHash})),records:[...edits].map(([p,e])=>({path:p,beforeHash:hash(e.before),afterHash:hash(e.after)}))};
