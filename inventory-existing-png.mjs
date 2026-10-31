@@ -1,45 +1,50 @@
 #!/usr/bin/env node
-// Safe read-only inventory for a future existing-PNG migration.
-// Does NOT encode, modify records, or delete files.
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative, basename } from 'node:path';
-const DATA=process.env.DATA_DIR || '/app/data';
+// Read-only PNG inventory. Scan each storage file only once.
+import {existsSync,readdirSync,readFileSync,statSync} from 'node:fs';
+import {join,relative,basename} from 'node:path';
+const DATA=process.env.DATA_DIR||'/app/data';
 const GALLERY=join(DATA,'gallery');
 const TABLES=join(DATA,'storage','tables');
-function scan(root,filter) {
- const result=[]; if(!existsSync(root))return result;
+function scan(root,filter){
+ const out=[];if(!existsSync(root))return out;
  const stack=[root];
  while(stack.length){
   const dir=stack.pop();
-  for(const ent of readdirSync(dir,{withFileTypes:true})){
-   const path=join(dir,ent.name);
-   if(ent.isDirectory()) stack.push(path);
-   else if(ent.isFile()&&filter(path)) result.push(path);
+  for(const e of readdirSync(dir,{withFileTypes:true})){
+   const p=join(dir,e.name);
+   if(e.isDirectory()) stack.push(p);
+   else if(e.isFile()&&filter(p))out.push(p);
   }
  }
- return result;
+ return out;
 }
-const images=scan(GALLERY,x=>/\.png$/i.test(x));
-const groups={};let bytes=0;
-for(const file of images){
- const rel=relative(GALLERY,file).replaceAll('\\','/');
+const imgs=scan(GALLERY,p=>/\.png$/i.test(p));
+const groups={};let total=0;
+for(const p of imgs){
+ const rel=relative(GALLERY,p).replaceAll('\\','/');
  const group=rel.split('/')[0]||'(root)';
- const size=statSync(file).size;
- bytes+=size;
- groups[group]??={count:0,bytes:0};
- groups[group].count++;groups[group].bytes+=size;
+ const n=statSync(p).size;total+=n;
+ const g=groups[group]??={count:0,bytes:0};
+ g.count++;g.bytes+=n;
 }
-const files=scan(TABLES,x=>/\.json(?:\.bak)?$/i.test(x));
-const references={};
-for(const file of files){
- let content;
- try{content=readFileSync(file,'utf8');}catch{continue;}
- let n=0;
- for(const image of images){
-  const rel=relative(GALLERY,image).replaceAll('\\','/');
-  const short=basename(image);
-  if(content.includes(rel)||content.includes(short))n++;
+const files=scan(TABLES,p=>/\.json(?:\.bak)?$/i.test(p));
+const refs={};let examined=0;
+const known=new Set(imgs.map(p=>basename(p)));
+const token=/[A-Za-z0-9_-]{10,80}\.png/gi;
+for(const p of files){
+ let data;
+ try{data=readFileSync(p,'utf8')}catch{continue}
+ let matched=false;
+ for(const t of data.matchAll(token)){if(known.has(t[0])){matched=true;break}}
+ if(matched){
+  const table=relative(TABLES,p).split('/')[0];
+  refs[table]=(refs[table]||0)+1;
  }
- if(n)references[relative(TABLES,file).split('/')[0]]=(references[relative(TABLES,file).split('/')[0]]||0)+n;
+ examined++;
 }
-console.log(JSON.stringify({mode:'READ_ONLY',dataDir:DATA,pngCount:images.length,pngMB:Number((bytes/1048576).toFixed(2)),groups,referenceMatchesByTable:references,warning:'This is an inventory only. It does not change or convert any files.'},null,2));
+console.log(JSON.stringify({
+ mode:'READ_ONLY',pngCount:imgs.length,pngMB:+(total/1048576).toFixed(2),
+ groups,storageFilesScanned:examined,
+ storageFilesContainingKnownPng:refs,
+ note:'Reference counts are files, not occurrence counts. No files were changed.'
+},null,2));
