@@ -24,7 +24,7 @@ if(staged)assert(stageManifest?.schema===1 && stageManifest.entries && typeof st
 const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
 function assert(c,m){if(!c)throw Error(m)}
 function files(dir){if(!fs.existsSync(dir))return [];const o=[],stack=[dir];while(stack.length){const dir=stack.pop();for(const e of fs.readdirSync(dir,{withFileTypes:true})){const f=path.join(dir,e.name);if(e.isDirectory())stack.push(f);else if(e.isFile()&&f.endsWith('.json'))o.push(f)}}return o.sort()}
-function writeAtomic(file,bytes){const temp=file+'.rp-webp-tmp';fs.writeFileSync(temp,bytes,{flag:'wx'});fs.renameSync(temp,file)}
+function writeAtomic(file,bytes){const temp=file+'.rp-webp-tmp-'+process.pid;try{fs.writeFileSync(temp,bytes,{flag:'wx'});fs.renameSync(temp,file)}finally{if(fs.existsSync(temp))fs.unlinkSync(temp)}}
 if(has('--version')){console.log(VERSION);process.exit(0)}
 assert(Number.isSafeInteger(limit)&&limit>=1&&limit<=10000,'Invalid --limit');
 assert(!apply||stopped,'Apply requires --server-stopped and fully stopped server');
@@ -44,7 +44,7 @@ if(restore){
  for(const e of manifest.records){writeAtomic(path.join(root,e.path),fs.readFileSync(path.join(dir,'records',e.path)))}
  for(const e of manifest.images){const png=path.join(gallery,e.from);if(!fs.existsSync(png))writeAtomic(png,fs.readFileSync(path.join(dir,'originals',e.from)))}
  for(const e of manifest.images)fs.unlinkSync(path.join(gallery,e.to));
- console.log('RESTORED',manifest.images.length,'images; original PNG files were always retained');process.exit(0)
+ console.log('RESTORED',manifest.images.length,'original PNG images and references');process.exit(0)
 }
 assert(fs.existsSync(path.join(root,'chat_images')),'Missing chat_images table');
 // A fast, read-only candidate lookup. No reference scans and no encoding.
@@ -61,6 +61,7 @@ for(const file of primaries){
 const selected=[...candidates].filter(([rel])=>!staged||Boolean(stageManifest.entries[rel])).sort((a,b)=>a[0].localeCompare(b[0])).slice(0,limit);
 console.log('VERSION',VERSION,'eligible',candidates.size,'selected',selected.length,'mode',apply?'APPLY':'PREVIEW');
 if(!apply){for(const [rel] of selected)console.log('CANDIDATE',rel);console.log('No files modified');process.exit(0)}
+assert(selected.length>0,'No eligible images selected');
 const all=files(root);
 const selectedNames=new Set(selected.map(([rel])=>path.basename(rel)));
 const selectedRel=new Set(selected.map(([rel])=>rel));
@@ -146,6 +147,7 @@ try{
   writeAtomic(target,e.after);committed++;
  }
  for(const [p,e] of edits)assert(hash(fs.readFileSync(path.join(root,p)))===hash(e.after),'Verification failed: '+p);
+ for(const [rel] of selected){for(const filename of files(root)){if(fs.readFileSync(filename,'utf8').includes(path.basename(rel)))throw Error('Unresolved PNG reference after rewrite: '+rel+' in '+filename)}}
  for(const e of converted)assert(hash(fs.readFileSync(path.join(gallery,e.to)))===e.webpHash,'WebP changed after write: '+e.to);
   for(const e of converted){const original=path.join(gallery,e.from);assert(hash(fs.readFileSync(original))===e.pngHash,'PNG changed before delete: '+e.from);fs.unlinkSync(original)}
   console.log('SUCCESS',converted.length,'PNG replaced with WebP; backup',backup)
