@@ -1,14 +1,17 @@
-{
-  "kind": "marinara.personal-extension",
-  "version": 1,
-  "config": {
-    "name": "갤러리 webp 변환",
-    "version": "1.8.3",
-    "description": "채팅방 갤러리의 PNG 삽화를 브라우저에서 WebP로 변환해 서버 용량을 줄입니다. 선택한 이미지 변환·선택 프롬프트 일괄 복사 버튼이 선택 바에 들어가고, 갤러리 헤더의 설정 버튼에서 그리드 열 수(기본/3/4/5), 새 삽화 자동 변환, 변환 품질(5단위), 캐릭터·페르소나 갤러리 사본 대상과 예상 용량, 이 채팅방 전체 변환, 사본 만들기를 다룹니다. 엔진 수정 없이 순정 갤러리 API만 사용합니다.",
-    "runtime": "client",
-    "enabled": false,
-    "capabilities": ["full_page_access"],
-    "jsPath": "extension.js",
-    "cssPath": "extension.css"
-  }
-}
+'use strict';
+const assert=require('node:assert/strict');
+const sharp=require('sharp');
+const convert=require('./convert-sync.cjs');
+(async()=>{
+ const width=48,height=48; const pixels=Buffer.alloc(width*height*4);
+ for(let i=0;i<width*height;i++){pixels[i*4]=i%255;pixels[i*4+1]=85;pixels[i*4+2]=205;pixels[i*4+3]=254+(i%2);}
+ const src=await sharp(pixels,{raw:{width,height,channels:4}}).png().toBuffer();
+ const out=convert(src);
+ assert.ok(out,'WebP conversion should succeed');
+ assert.equal((await sharp(out).metadata()).format,'webp');
+ const original=await sharp(src).ensureAlpha().raw().toBuffer();
+ const result=await sharp(out).ensureAlpha().raw().toBuffer();
+ for(let i=3;i<original.length;i+=4) assert.equal(result[i],original[i]);
+ assert.equal(convert(Buffer.from('not png')),null);
+ console.log('Image conversion passed; alpha channel identical');
+})().catch(e=>{console.error(e);process.exitCode=1});
